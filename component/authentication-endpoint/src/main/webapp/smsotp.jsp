@@ -76,9 +76,9 @@
         <div class="container-fluid">
             <div class="pull-left brand float-remove-xs text-center-xs">
                 <a href="#">
-                    <img src="images/logo-inverse.svg" alt="wso2" title="wso2" class="logo">
+                    <img src="images/resize.png" alt="wso2" title="wso2" class="logo">
 
-                    <h1><em>Identity Server</em></h1>
+                   <!--  <h1><em>Identity Server</em></h1> -->
                 </a>
             </div>
         </div>
@@ -93,8 +93,8 @@
                 <!-- content -->
                 <div class="container col-xs-10 col-sm-6 col-md-6 col-lg-4 col-centered wr-content wr-login col-centered">
                     <div>
-                        <h2 class="wr-title blue-bg padding-double white boarder-bottom-blue margin-none">
-                            Authenticating with SMSOTP &nbsp;&nbsp;</h2>
+                        <h2 class="wr-title black-bg padding-double white boarder-bottom-blue margin-none">
+                            One time password &nbsp;&nbsp;</h2>
 
                     </div>
                     <div class="boarder-all ">
@@ -118,25 +118,28 @@
                                                 <div class="alert alert-error">Authentication Failed! Please Retry</div>
                                     <% } }  %>
                                     <div class="row">
-                                        <div class="span6">
+                                        <div class="span6" >
                                              <!-- Token Pin -->
                                              <% if (request.getParameter("screenvalue") != null) { %>
+                                              <div  text-align:"center"> One time passwords are used to share CDR Data. You will never be asked to share your real password. </div>
                                               <div class="control-group">
                                                <label class="control-label" for="password">
                                                Enter the code sent to your mobile phone:<%=Encode.forHtmlContent(request.getParameter("screenvalue"))%></label>
                                                <input type="password" id='OTPcode' name="OTPcode"
                                                class="input-xlarge" size='30'/>
                                                <% } else { %>
+                                              <div text-align:"center"> One time passwords are used to share CDR Data. You will never be asked to share your real password. </div>
                                                <div class="control-group">
                                                <label class="control-label" for="password">Enter the code sent to your mobile phone:</label>
                                                <input type="password" id='OTPcode' name="OTPcode"
                                                class="input-xlarge" size='30'/>
                                                <% } %>
                                              </div>
+                                             <div class="identity-box">If you did not recieve a code, please update your contact details.</div>
                                              <input type="hidden" name="sessionDataKey"
                                                 value='<%=Encode.forHtmlAttribute(request.getParameter("sessionDataKey"))%>'/><br/>
                                              <div> <input type="button" name="authenticate" id="authenticate"
-                                                value="Authenticate" class="btn btn-primary"></div>
+                                                value="Authenticate" class="btn btn-primary black-bg"></div>
                                              <%
                                                  if ("true".equals(authenticationFailed)) {
                                                  String reSendCode = request.getParameter("resendCode");

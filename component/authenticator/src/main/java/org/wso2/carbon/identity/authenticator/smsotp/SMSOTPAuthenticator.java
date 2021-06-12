@@ -19,10 +19,20 @@
 
 package org.wso2.carbon.identity.authenticator.smsotp;
 
-import org.apache.catalina.util.URLEncoder;
 import org.apache.commons.lang.StringUtils;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
+import org.apache.http.HttpEntity;
+import org.apache.http.HttpHeaders;
+import org.apache.http.client.methods.CloseableHttpResponse;
+import org.apache.http.client.methods.HttpPost;
+import org.apache.http.conn.ssl.SSLSocketFactory;
+import org.apache.http.conn.ssl.X509HostnameVerifier;
+import org.apache.http.entity.StringEntity;
+import org.apache.http.impl.client.CloseableHttpClient;
+import org.apache.http.impl.client.HttpClientBuilder;
+import org.json.JSONException;
+import org.json.JSONObject;
 import org.wso2.carbon.extension.identity.helper.FederatedAuthenticatorUtil;
 import org.wso2.carbon.extension.identity.helper.IdentityHelperConstants;
 import org.wso2.carbon.extension.identity.helper.util.IdentityHelperUtil;
@@ -44,7 +54,6 @@ import org.wso2.carbon.identity.application.common.model.Property;
 import org.wso2.carbon.identity.authenticator.smsotp.exception.SMSOTPException;
 import org.wso2.carbon.identity.authenticator.smsotp.internal.SMSOTPServiceDataHolder;
 import org.wso2.carbon.identity.core.util.IdentityTenantUtil;
-import org.wso2.carbon.identity.core.util.IdentityUtil;
 import org.wso2.carbon.identity.event.IdentityEventConstants;
 import org.wso2.carbon.identity.event.event.Event;
 import org.wso2.carbon.user.api.UserRealm;
@@ -52,9 +61,9 @@ import org.wso2.carbon.user.api.UserStoreException;
 import org.wso2.carbon.user.core.service.RealmService;
 import org.wso2.carbon.utils.multitenancy.MultitenantUtils;
 
-import javax.net.ssl.HttpsURLConnection;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
+import javax.ws.rs.core.MediaType;
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
@@ -62,8 +71,8 @@ import java.io.OutputStreamWriter;
 import java.net.HttpURLConnection;
 import java.net.MalformedURLException;
 import java.net.ProtocolException;
-import java.net.URL;
 import java.net.URLDecoder;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -71,7 +80,6 @@ import java.util.Map;
 
 import static java.util.Base64.getEncoder;
 import static org.wso2.carbon.identity.authenticator.smsotp.SMSOTPConstants.MASKING_VALUE_SEPARATOR;
-import static org.wso2.carbon.identity.base.IdentityConstants.IdentityTokens.USER_CLAIMS;
 
 /**
  * Authenticator of SMS OTP
@@ -80,6 +88,9 @@ public class SMSOTPAuthenticator extends AbstractApplicationAuthenticator implem
 
     private static Log log = LogFactory.getLog(SMSOTPAuthenticator.class);
     private static final String TRIGGER_SMS_NOTIFICATION = "TRIGGER_SMS_NOTIFICATION";
+    private static final String HOST_NAME_VERIFIER = "httpclient.hostnameVerifier";
+    public static final String ALLOW_ALL = "AllowAll";
+    public static final String STRICT = "Strict";
 
     /**
      * Check whether the authentication or logout request can be handled by the authenticator
@@ -167,6 +178,7 @@ public class SMSOTPAuthenticator extends AbstractApplicationAuthenticator implem
                     checkStatusCode(response, context, queryParams, errorPage);
                 } else {
                     mobileNumber = getMobileNumber(request, response, context, username, tenantDomain, queryParams);
+                    context.setProperty("mobile", mobileNumber);
                     if (StringUtils.isNotEmpty(mobileNumber)) {
                         proceedWithOTP(response, context, errorPage, mobileNumber, queryParams, username);
                     }
@@ -463,6 +475,7 @@ public class SMSOTPAuthenticator extends AbstractApplicationAuthenticator implem
                 redirectToErrorPage(response, context, queryParams, SMSOTPConstants.ERROR_SMSOTP_DISABLE);
             } else {
                 mobileNumber = getMobileNumber(request, response, context, username, tenantDomain, queryParams);
+                context.setProperty("mobile", mobileNumber);
             }
         } else if (SMSOTPUtils.isSendOTPDirectlyToMobile(context)) {
             if (log.isDebugEnabled()) {
@@ -552,17 +565,18 @@ public class SMSOTPAuthenticator extends AbstractApplicationAuthenticator implem
             String payload = authenticatorProperties.get(SMSOTPConstants.PAYLOAD);
             String httpResponse = authenticatorProperties.get(SMSOTPConstants.HTTP_RESPONSE);
             boolean connectionResult = true;
+            connectionResult = sendRESTCall(context, smsUrl, httpMethod, headerString, payload,
+                    httpResponse, mobileNumber, otpToken);
             //Check the SMS URL configure in UI and give the first priority for that.
-            if (StringUtils.isNotEmpty(smsUrl)) {
-                connectionResult = sendRESTCall(context, smsUrl, httpMethod, headerString, payload,
-                        httpResponse, mobileNumber, otpToken);
+            /*if (StringUtils.isNotEmpty(smsUrl)) {
+
             } else {
                 //Use the default notification mechanism (CEP) to send SMS.
                 AuthenticatedUser authenticatedUser = (AuthenticatedUser)
                         context.getProperty(SMSOTPConstants.AUTHENTICATED_USER);
                 triggerNotification(authenticatedUser.getUserName(), authenticatedUser.getTenantDomain(),
                         authenticatedUser.getUserStoreDomain(), mobileNumber, otpToken);
-            }
+            }*/
 
             if (!connectionResult) {
                 String retryParam;
@@ -714,6 +728,10 @@ public class SMSOTPAuthenticator extends AbstractApplicationAuthenticator implem
         String userToken = request.getParameter(SMSOTPConstants.CODE);
         String contextToken = (String) context.getProperty(SMSOTPConstants.OTP_TOKEN);
         AuthenticatedUser authenticatedUser = (AuthenticatedUser) context.getProperty(SMSOTPConstants.AUTHENTICATED_USER);
+        String clientId =  SMSOTPUtils.getClientId(context);
+        String clientSecret = SMSOTPUtils.getClientSecret(context);
+        String mobile = (String) context.getProperty("mobile");
+       // String mobile = SMSOTPUtils.getMobileNumberForUsername(context.getLastAuthenticatedUser().);
         if (StringUtils.isEmpty(request.getParameter(SMSOTPConstants.CODE))) {
             throw new InvalidCredentialsException("Code cannot not be null");
         }
@@ -723,7 +741,52 @@ public class SMSOTPAuthenticator extends AbstractApplicationAuthenticator implem
             }
             throw new InvalidCredentialsException("Retrying to resend the OTP");
         }
-        if (userToken.equals(contextToken)) {
+        //send the otp for validation
+        String domain = SMSOTPUtils.getDomainName(context);
+        String oppVerificationURL = "https://" + domain + "/oauth/token";
+        HttpPost httpPost = new HttpPost(oppVerificationURL);
+        JSONObject validationResponse;
+        try {
+            try (CloseableHttpClient client = HttpClientBuilder.create()
+                    .setHostnameVerifier(getX509HostnameVerifier()).build()) {
+                HttpEntity entity = new StringEntity(createOTPVerifiyRequest(mobile, userToken, clientId, clientSecret )
+                        , StandardCharsets.UTF_8);
+                httpPost.setEntity(entity);
+                httpPost.setHeader(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_JSON);
+                // httpPost.setHeader(HttpHeaders.AUTHORIZATION, AUTH_BASIC + HTTPClientUtils.getBasicAuthCredentials());
+
+                if (log.isDebugEnabled()) {
+                    log.debug("Attempting HTTP call: " + httpPost);
+                }
+                CloseableHttpResponse verificationResponse = client.execute(httpPost);
+                StringBuilder sb = new StringBuilder();
+                String line;
+                try (BufferedReader reader = new BufferedReader(new InputStreamReader(verificationResponse.getEntity()
+                        .getContent(), StandardCharsets.UTF_8))) {
+                    while ((line = reader.readLine()) != null) {
+                        sb.append(line + "\n");
+                    }
+                } catch (IOException e) {
+                    log.error("Error occurred while reading JSON response from SMS OTP Service ", e);
+                    // return enforcementResponse;
+                }
+                if (log.isDebugEnabled()) {
+                    log.debug("Response from Account Consent Validation Service : " + sb.toString());
+                }
+                validationResponse = parseResponseFromValidationService(sb.toString());
+            }
+        } catch (IOException e) {
+            throw new AuthenticationFailedException("Error while trying to validate the OTP", e);
+        }
+        //check whether token is obtained from auth0
+        if (validationResponse.has("access_token")) {
+            context.setSubject(authenticatedUser);
+        } else if (validationResponse.has("error")) {
+            context.setProperty(SMSOTPConstants.CODE_MISMATCH, true);
+            throw new AuthenticationFailedException("Code mismatch");
+        }
+
+      /*  if (userToken.equals(contextToken)) {
             if ((context.getProperty(SMSOTPConstants.TOKEN_VALIDITY_TIME) != null) && StringUtils.
                     isNotEmpty(context.getProperty(SMSOTPConstants.TOKEN_VALIDITY_TIME).toString())) {
                 long elapsedTokenTime = System.currentTimeMillis() - Long.parseLong(context.getProperty(SMSOTPConstants.
@@ -743,7 +806,18 @@ public class SMSOTPAuthenticator extends AbstractApplicationAuthenticator implem
         } else {
             context.setProperty(SMSOTPConstants.CODE_MISMATCH, true);
             throw new AuthenticationFailedException("Code mismatch");
+        }*/
+    }
+
+    private JSONObject parseResponseFromValidationService(String response) {
+        JSONObject object = new JSONObject();
+        try {
+            object = new JSONObject(response);
+        } catch (JSONException ex) {
+            object.put( "isValid", false);
+            log.error("Error while parsing response from validation service: " + response);
         }
+        return object;
     }
 
     /**
@@ -1108,7 +1182,7 @@ public class SMSOTPAuthenticator extends AbstractApplicationAuthenticator implem
         if (log.isDebugEnabled()) {
             log.debug("Preparing message for sending out");
         }
-        HttpURLConnection httpConnection;
+        /*HttpURLConnection httpConnection;
         boolean connection;
         String smsMessage = SMSOTPConstants.SMS_MESSAGE;
         URLEncoder encoder = new URLEncoder();
@@ -1133,7 +1207,87 @@ public class SMSOTPAuthenticator extends AbstractApplicationAuthenticator implem
             connection = getConnection(httpConnection, context, headerString, payload, httpResponse, encodedMobileNo,
                     smsMessage, otpToken, httpMethod);
         }
-        return connection;
+        return connection;*/
+        String domain = SMSOTPUtils.getDomainName(context);
+        String startOTPFlowURL = "https://" + domain + "/passwordless/start";
+        String clientId = SMSOTPUtils.getClientId(context);
+        String clientSecret = SMSOTPUtils.getClientSecret(context);
+        HttpPost httpPost = new HttpPost(startOTPFlowURL);
+        try (CloseableHttpClient client = HttpClientBuilder.create()
+                .setHostnameVerifier(getX509HostnameVerifier()).build()) {
+            HttpEntity entity = new StringEntity(createOTPRequest(mobile, clientId, clientSecret), StandardCharsets.UTF_8);
+            httpPost.setEntity(entity);
+            httpPost.setHeader(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_JSON);
+           // httpPost.setHeader(HttpHeaders.AUTHORIZATION, AUTH_BASIC + HTTPClientUtils.getBasicAuthCredentials());
+
+            if (log.isDebugEnabled()) {
+                log.debug("Attempting HTTP call: " + httpPost);
+            }
+            CloseableHttpResponse response = client.execute(httpPost);
+            StringBuilder sb = new StringBuilder();
+            String line;
+            try (BufferedReader reader = new BufferedReader(new InputStreamReader(response.getEntity().getContent(),
+                    StandardCharsets.UTF_8))) {
+                while ((line = reader.readLine()) != null) {
+                    sb.append(line + "\n");
+                }
+            } catch (IOException e) {
+                log.error("Error occurred while reading JSON response from SMS OTP Service ", e);
+               // return enforcementResponse;
+            }
+            JSONObject otpResponse = parseResponseFromValidationService(sb.toString());
+            if (otpResponse.has("_id")) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private String createOTPRequest(String mobile, String clientId, String clientSecret) {
+        Map<String, String> parameters = new HashMap<>();
+        parameters.put("client_id", clientId);
+        parameters.put("client_secret", clientSecret);
+        parameters.put("connection", "sms");
+        parameters.put("phone_number", mobile);
+        parameters.put("send", "code");
+        JSONObject jsonObject = new JSONObject(parameters);
+        return jsonObject.toString();
+    }
+
+    private String createOTPVerifiyRequest(String mobile, String otp, String clientId, String clientSecret) {
+
+        Map<String, String> parameters = new HashMap<>();
+        parameters.put("client_id", clientId);
+        parameters.put("client_secret", clientSecret);
+        parameters.put("username", mobile);
+        parameters.put("otp", otp);
+        parameters.put("realm", "sms");
+        parameters.put("scope", "openid profile email");
+        parameters.put("grant_type", "http://auth0.com/oauth/grant-type/passwordless/otp");
+        JSONObject jsonObject = new JSONObject(parameters);
+        return jsonObject.toString();
+    }
+
+
+    /**
+     * Get the Hostname Verifier property in set in system properties
+     *
+     * @return X509HostnameVerifier
+     */
+    public static X509HostnameVerifier getX509HostnameVerifier() {
+
+        String hostnameVerifierOption = System.getProperty(HOST_NAME_VERIFIER);
+        X509HostnameVerifier hostnameVerifier;
+
+        if (ALLOW_ALL.equalsIgnoreCase(hostnameVerifierOption)) {
+            hostnameVerifier = SSLSocketFactory.ALLOW_ALL_HOSTNAME_VERIFIER;
+        } else if (STRICT.equalsIgnoreCase(hostnameVerifierOption)) {
+            hostnameVerifier = SSLSocketFactory.STRICT_HOSTNAME_VERIFIER;
+        } else {
+            hostnameVerifier = SSLSocketFactory.BROWSER_COMPATIBLE_HOSTNAME_VERIFIER;
+        }
+
+        return hostnameVerifier;
     }
 
     /**

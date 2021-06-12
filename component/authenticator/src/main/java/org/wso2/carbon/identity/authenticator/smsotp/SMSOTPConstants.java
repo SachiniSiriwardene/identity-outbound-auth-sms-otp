@@ -19,7 +19,13 @@
 
 package org.wso2.carbon.identity.authenticator.smsotp;
 
+import org.omg.CORBA.PUBLIC_MEMBER;
+
 public class SMSOTPConstants {
+
+    public static final String CLIENT_ID = "ClientId";
+    public static final String CLIENT_SECRET = "ClientSecret";
+    public static final String DOMAIN = "Domain";
 
     public static final String AUTHENTICATOR_NAME = "SMSOTP";
     public static final String AUTHENTICATOR_FRIENDLY_NAME = "SMS OTP";

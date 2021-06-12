@@ -389,6 +389,41 @@ public class SMSOTPUtils {
         return getConfiguration(context, SMSOTPConstants.TOKEN_LENGTH);
     }
 
+
+    /**
+     * Get the client id.
+     *
+     * @param context the AuthenticationContext
+     * @return tokenLength
+     */
+    public static String getClientId(AuthenticationContext context) {
+
+        return getConfiguration(context, SMSOTPConstants.CLIENT_ID);
+    }
+
+
+    /**
+     * Get the client secret.
+     *
+     * @param context the AuthenticationContext
+     * @return tokenLength
+     */
+    public static String getClientSecret(AuthenticationContext context) {
+
+        return getConfiguration(context, SMSOTPConstants.CLIENT_SECRET);
+    }
+
+    /**
+     * Get the domain name.
+     *
+     * @param context the AuthenticationContext
+     * @return tokenLength
+     */
+    public static String getDomainName(AuthenticationContext context) {
+
+        return getConfiguration(context, SMSOTPConstants.DOMAIN);
+    }
+
     /**
      * Read configurations from application-authentication.xml for given authenticator.
      *
